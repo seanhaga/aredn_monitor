@@ -154,7 +154,9 @@ select{background:var(--card);color:var(--t);border:1px solid var(--bdr);padding
 
 <script>
 'use strict';
-const S={nodes:[],active:0,timer:null,hist:{},charts:{},MH:120};
+const CONFIG_NODES=__CONFIG_NODES__;
+const DEFAULT_IV=__DEFAULT_IV__;
+const S={nodes:(CONFIG_NODES||[]).map(n=>({host:n.host,name:n.name||n.host,status:'unknown',metrics:null,raw:'',error:null})),active:0,timer:null,hist:{},charts:{},MH:120};
 const COLS=['#00cc66','#3b82f6','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4'];
 const ge=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -177,7 +179,7 @@ function qb(q){if(q==null)return'<span class="bdg bn">N/A</span>';return'<span c
 function sc(s){return s==null?'var(--d)':s>-65?'var(--g)':s>-80?'var(--w)':'var(--r)';}
 
 function save(){try{localStorage.setItem('aredn',JSON.stringify(S.nodes.map(n=>({host:n.host,name:n.name}))));}catch(e){}}
-function loadSaved(){try{const d=JSON.parse(localStorage.getItem('aredn')||'[]');S.nodes=d.map(n=>({host:n.host,name:n.name,status:'unknown',metrics:null,raw:'',error:null}));}catch(e){S.nodes=[];}}
+function loadSaved(){try{const raw=localStorage.getItem('aredn');if(!raw)return;const d=JSON.parse(raw||'[]');if(Array.isArray(d)&&d.length){S.nodes=d.map(n=>({host:n.host,name:n.name||n.host,status:'unknown',metrics:null,raw:'',error:null}));}}catch(e){}}
 
 function openMod(){ge('ov').classList.add('open');setTimeout(()=>ge('ih').focus(),80);}
 function closeMod(){ge('ov').classList.remove('open');}
@@ -398,7 +400,7 @@ function renderCharts(host,M,h){
 
 function applyIv(){clearInterval(S.timer);const iv=parseInt(ge('ivs').value);if(iv>0)S.timer=setInterval(fetchAll,iv*1000);}
 
-loadSaved();renderTabs();
+ge('ivs').value=String(DEFAULT_IV||30);loadSaved();renderTabs();
 if(S.nodes.length){fetchAll();applyIv();}
 </script></body></html>"""
 
@@ -418,10 +420,11 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         p = urlparse(self.path)
         if p.path in ('/', '', '/index.html'):
+            page = getattr(self.server, 'page', PAGE)
             self.send_response(200)
             self.send_header('Content-Type','text/html; charset=utf-8')
-            self.send_header('Content-Length',str(len(PAGE)))
-            self.end_headers(); self.wfile.write(PAGE)
+            self.send_header('Content-Length',str(len(page)))
+            self.end_headers(); self.wfile.write(page)
         elif p.path == '/api/metrics':
             params = parse_qs(p.query)
             node = params.get('node',['localnode.local.mesh'])[0]
@@ -438,13 +441,58 @@ class H(BaseHTTPRequestHandler):
         else:
             self.send_response(404); self.end_headers()
 
+def _load_config(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def _clamp_iv(sec):
+    # Values must match one of the <select> options in the embedded UI.
+    allowed = {0, 15, 30, 60, 120}
+    try:
+        iv = int(sec)
+    except Exception:
+        return 30
+    return iv if iv in allowed else 30
+
+def _build_page(config):
+    dash = (config or {}).get('dashboard', {}) if isinstance(config, dict) else {}
+    nodes = dash.get('nodes', []) if isinstance(dash, dict) else []
+    cleaned_nodes = []
+    if isinstance(nodes, list):
+        for n in nodes:
+            if not isinstance(n, dict) or 'host' not in n:
+                continue
+            cleaned_nodes.append({'host': str(n['host']), 'name': str(n.get('name') or n['host'])})
+
+    iv = _clamp_iv(dash.get('refresh_seconds', 30) if isinstance(dash, dict) else 30)
+    nodes_json = json.dumps(cleaned_nodes, ensure_ascii=True)
+    # Inject as raw JS literals.
+    page = PAGE.replace(b'__CONFIG_NODES__', nodes_json.encode('utf-8'))
+    page = page.replace(b'__DEFAULT_IV__', str(iv).encode('utf-8'))
+    return page
+
 def main():
     ap = argparse.ArgumentParser(description='AREDN Node Monitor')
-    ap.add_argument('--host', default='127.0.0.1')
-    ap.add_argument('--port', type=int, default=8765)
+    ap.add_argument('--config', default=None, help='Path to JSON config file')
+    ap.add_argument('--host', default=None)
+    ap.add_argument('--port', type=int, default=None)
     a = ap.parse_args()
-    srv = HTTPServer((a.host, a.port), H)
-    url = 'http://{}:{}'.format('localhost' if a.host=='127.0.0.1' else a.host, a.port)
+
+    config = {}
+    if a.config:
+        try:
+            config = _load_config(a.config)
+        except Exception as e:
+            print(f'Failed to load config {a.config}: {e}', file=sys.stderr)
+            raise SystemExit(2)
+
+    server_cfg = (config or {}).get('server', {}) if isinstance(config, dict) else {}
+    host = a.host or server_cfg.get('host', '127.0.0.1')
+    port = a.port or server_cfg.get('port', 8765)
+
+    srv = HTTPServer((host, port), H)
+    srv.page = _build_page(config)
+    url = 'http://{}:{}'.format('localhost' if host=='127.0.0.1' else host, port)
     print('='*45)
     print('  AREDN Node Monitor')
     print('  Open: '+url)

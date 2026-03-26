@@ -10,6 +10,19 @@ python3 aredn_monitor.py --host 0.0.0.0 --port 8765
 
 Open the printed URL (default is `http://localhost:8765`).
 
+## Optional Config File
+
+You can provide `--config` to pre-load dashboard nodes and (optionally) set the server host/port.
+
+```bash
+python3 aredn_monitor.py --config config.json
+```
+
+Example schema (`config.example.json`):
+- `server.host` / `server.port` (optional): defaults to `127.0.0.1:8765`
+- `dashboard.refresh_seconds` (optional): one of `0, 15, 30, 60, 120` (defaults to `30`)
+- `dashboard.nodes` (optional): array of `{ "host": "...", "name": "..." }`
+
 ## Add nodes in the UI
 
 Use “+ Add Node”, enter a hostname/IP for the AREDN node, and the dashboard will fetch `/cgi-bin/metrics` from that host.

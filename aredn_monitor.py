@@ -117,7 +117,6 @@ select{background:var(--card);color:var(--t);border:1px solid var(--bdr);padding
 
 <div id="hdr">
   <div class="logo">&#x1F4E1; AREDN Monitor <small>Prometheus Dashboard</small></div>
-  <div id="tabs"></div>
   <div id="ctrl">
     <span id="sw" style="display:none"><span class="spin"></span></span>
     <select id="ivs" onchange="applyIv()">
@@ -125,8 +124,10 @@ select{background:var(--card);color:var(--t);border:1px solid var(--bdr);padding
       <option value="30" selected>30s</option><option value="60">60s</option>
       <option value="120">2min</option>
     </select>
+    <select id="nodeSel" style="display:none;min-width:220px" onchange="nodeSelChanged()"></select>
     <button class="btn" onclick="fetchAll()">&#8635; Refresh</button>
     <button class="btn p" onclick="openMod()">+ Add Node</button>
+    <button class="btn" id="rmBtn" style="display:none" onclick="removeActiveNode()">Remove Node</button>
     <span class="ts" id="ts">&#8212;</span>
   </div>
 </div>
@@ -193,22 +194,44 @@ function addNode(){
   if(S.nodes.find(n=>n.host===host)){alert('Already added.');return;}
   S.nodes.push({host,name,status:'unknown',metrics:null,raw:'',error:null});
   S.active=S.nodes.length-1;
-  save();closeMod();renderTabs();fetchAll();
+  save();closeMod();renderNodeSel();fetchAll();
   ge('ih').value='';ge('iname').value='';
 }
 function removeNode(i,e){
-  e.stopPropagation();
+  if(e)e.stopPropagation();
   if(!confirm('Remove "'+S.nodes[i].name+'"?'))return;
   S.nodes.splice(i,1);
   if(S.active>=S.nodes.length)S.active=Math.max(0,S.nodes.length-1);
-  save();renderTabs();S.nodes.length?renderDash():renderEmpty();
+  save();renderNodeSel();S.nodes.length?renderDash():renderEmpty();updateAlert();
 }
-function selectNode(i){S.active=i;renderTabs();renderDash();}
-function renderTabs(){
-  ge('tabs').innerHTML=S.nodes.map((n,i)=>'<div class="tab '+(i===S.active?'active ':'')+n.status
-    +'" onclick="selectNode('+i+')"><span class="dot"></span>'+esc(n.name)
-    +(S.nodes.length>1?'<span class="x" onclick="removeNode('+i+',event)">&#10005;</span>':'')
-    +'</div>').join('');
+function selectNode(i){S.active=i;renderNodeSel();renderDash();updateAlert();}
+function nodeSelChanged(){
+  const sel=ge('nodeSel');
+  const i=parseInt(sel.value);
+  if(!isNaN(i))selectNode(i);
+}
+function removeActiveNode(){
+  if(!S.nodes.length)return;
+  removeNode(S.active);
+}
+function renderNodeSel(){
+  const sel=ge('nodeSel');
+  const rm=ge('rmBtn');
+  if(!S.nodes.length){
+    if(sel){sel.style.display='none';sel.innerHTML='';}
+    if(rm)rm.style.display='none';
+    return;
+  }
+  if(sel){
+    sel.style.display='inline-block';
+    const cur=S.active;
+    sel.innerHTML=S.nodes.map((n,i)=>{
+      const st=n.status==='ok'?'OK':n.status==='err'?'ERR':'?';
+      return '<option value="'+i+'">'+esc(n.name)+' ('+esc(st)+')</option>';
+    }).join('');
+    sel.value=String(cur);
+  }
+  if(rm)rm.style.display='inline-block';
 }
 
 async function fetchAll(){
@@ -217,7 +240,7 @@ async function fetchAll(){
   await Promise.all(S.nodes.map(fetchNode));
   ge('sw').style.display='none';
   ge('ts').textContent='Updated '+fmt.ts();
-  renderTabs();renderDash();updateAlert();
+  renderNodeSel();renderDash();updateAlert();
 }
 async function fetchNode(node){
   try{
@@ -400,7 +423,7 @@ function renderCharts(host,M,h){
 
 function applyIv(){clearInterval(S.timer);const iv=parseInt(ge('ivs').value);if(iv>0)S.timer=setInterval(fetchAll,iv*1000);}
 
-ge('ivs').value=String(DEFAULT_IV||30);loadSaved();renderTabs();
+ge('ivs').value=String(DEFAULT_IV||30);loadSaved();renderNodeSel();
 if(S.nodes.length){fetchAll();applyIv();}
 </script></body></html>"""
 

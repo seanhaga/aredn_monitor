@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AREDN Node Monitor - python3 aredn_monitor.py [--host 0.0.0.0] [--port 8765]"""
 import argparse, json, re, sys, urllib.error, urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 _SR = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+([-+]?(?:NaN|[+-]?Inf|\d*\.?\d+(?:[eE][-+]?\d+)?))')
@@ -16,7 +16,7 @@ def parse_prom(text):
         if not m: continue
         labels = dict(_LR.findall(m.group(2) or ''))
         try: val = float(m.group(3))
-        except: val = None
+        except ValueError: val = None
         r.setdefault(m.group(1), []).append({'labels': labels, 'value': val})
     return r
 
@@ -180,7 +180,7 @@ function qb(q){if(q==null)return'<span class="bdg bn">N/A</span>';return'<span c
 function sc(s){return s==null?'var(--d)':s>-65?'var(--g)':s>-80?'var(--w)':'var(--r)';}
 
 function save(){try{localStorage.setItem('aredn',JSON.stringify(S.nodes.map(n=>({host:n.host,name:n.name}))));}catch(e){}}
-function loadSaved(){try{const raw=localStorage.getItem('aredn');if(!raw)return;const d=JSON.parse(raw||'[]');if(Array.isArray(d)&&d.length){S.nodes=d.map(n=>({host:n.host,name:n.name||n.host,status:'unknown',metrics:null,raw:'',error:null}));}}catch(e){}}
+function loadSaved(){try{const raw=localStorage.getItem('aredn');if(!raw)return;const d=JSON.parse(raw||'[]');if(!Array.isArray(d)||!d.length)return;const saved=d.map(n=>({host:n.host,name:n.name||n.host,status:'unknown',metrics:null,raw:'',error:null}));const merged=[...S.nodes];for(const n of saved){if(!merged.find(x=>x.host===n.host))merged.push(n);}S.nodes=merged;}catch(e){}}
 
 function openMod(){ge('ov').classList.add('open');setTimeout(()=>ge('ih').focus(),80);}
 function closeMod(){ge('ov').classList.remove('open');}
@@ -289,7 +289,9 @@ function renderDash(){
 
   const tN=gv(M,'node_time_seconds'),tB=gv(M,'node_boot_time_seconds');
   const up=(tN!=null&&tB!=null)?tN-tB:null;
-  const mT=gv(M,'node_memory_MemTotal_bytes'),mA=gv(M,'node_memory_MemAvailable_bytes')??gv(M,'node_memory_MemFree_bytes');
+  const mT=gv(M,'node_memory_MemTotal_bytes');
+  const _mAvail=gv(M,'node_memory_MemAvailable_bytes'),_mFree=gv(M,'node_memory_MemFree_bytes');
+  const mA=_mAvail??_mFree,mMemFallback=_mAvail==null&&_mFree!=null;
   const mU=(mT&&mA)?mT-mA:null,mP=(mT&&mU)?mU/mT*100:null;
   const fsZ=gv(M,'node_filesystem_size_bytes',{mountpoint:'/'}),fsA=gv(M,'node_filesystem_avail_bytes',{mountpoint:'/'});
   const fsU=(fsZ&&fsA)?fsZ-fsA:null,fsP=(fsZ&&fsU)?fsU/fsZ*100:null;
@@ -356,7 +358,7 @@ function renderDash(){
     +'<div class="grid g4">'
     +'<div class="card cg"><div class="ct">Uptime</div><div class="sv" style="font-size:19px">'+fmt.up(up)+'</div><div class="su">Since last boot</div></div>'
     +'<div class="card '+lcls+'"><div class="ct">CPU Load</div><div class="lbs">'+lbar('1m',l1)+lbar('5m',l5)+lbar('15m',l15)+'</div></div>'
-    +'<div class="card '+mc[0]+'"><div class="ct">Memory</div><div class="sv">'+fmt.b(mU)+'</div><div class="su">of '+fmt.b(mT)+'</div>'
+    +'<div class="card '+mc[0]+'"><div class="ct">Memory'+(mMemFallback?' <span title="MemAvailable unavailable; using MemFree (may underestimate usage)" style="color:var(--w);cursor:help;font-size:9px">&#9888; MemFree</span>':'')+'</div><div class="sv">'+fmt.b(mU)+'</div><div class="su">of '+fmt.b(mT)+'</div>'
       +'<div class="pb"><div class="pbr"><span>Used</span><span>'+fmt.pct(mP)+'</span></div>'
       +'<div class="pbt"><div class="pbf '+mc[1]+'" style="width:'+Math.min(100,mP||0)+'%"></div></div></div></div>'
     +'<div class="card '+fc[0]+'"><div class="ct">Storage (rootfs)</div><div class="sv">'+fmt.b(fsU)+'</div><div class="su">of '+fmt.b(fsZ)+'</div>'
@@ -451,7 +453,10 @@ class H(BaseHTTPRequestHandler):
         elif p.path == '/api/metrics':
             params = parse_qs(p.query)
             node = params.get('node',['localnode.local.mesh'])[0]
-            url = node if node.startswith('http') else 'http://'+node+'/cgi-bin/metrics'
+            if not re.fullmatch(r'[a-zA-Z0-9._-]+(:\d+)?', node):
+                self._json(400, {'ok': False, 'error': 'Invalid node - must be a plain hostname or IP, optionally with port'})
+                return
+            url = 'http://' + node + '/cgi-bin/metrics'
             try:
                 req = urllib.request.Request(url, headers={'User-Agent':'AREDN-Monitor/2.0'})
                 with urllib.request.urlopen(req, timeout=12) as r:
@@ -513,7 +518,7 @@ def main():
     host = a.host or server_cfg.get('host', '127.0.0.1')
     port = a.port or server_cfg.get('port', 8765)
 
-    srv = HTTPServer((host, port), H)
+    srv = ThreadingHTTPServer((host, port), H)
     srv.page = _build_page(config)
     url = 'http://{}:{}'.format('localhost' if host=='127.0.0.1' else host, port)
     print('='*45)

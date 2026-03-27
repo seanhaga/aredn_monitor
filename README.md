@@ -22,6 +22,17 @@ Example schema (`config.example.json`):
 - `server.host` / `server.port` (optional): defaults to `127.0.0.1:8765`
 - `dashboard.refresh_seconds` (optional): one of `0, 15, 30, 60, 120` (defaults to `30`)
 - `dashboard.nodes` (optional): array of `{ "host": "...", "name": "..." }`
+- `storage.enabled` / `storage.directory` (optional): when `enabled` is true, each successful `/cgi-bin/metrics` fetch is appended as one JSON line to `<directory>/<node>.jsonl` (parsed metrics plus UTC timestamp). Use for local history or offline analysis; files can grow quickly if the refresh interval is short.
+
+### Metrics storage (CLI)
+
+Enable logging without editing config:
+
+```bash
+python3 aredn_monitor.py --storage ./metrics_data
+```
+
+This overrides `storage` in the config file if both are set.
 
 ## Add nodes in the UI
 

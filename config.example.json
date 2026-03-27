@@ -8,5 +8,9 @@
     "nodes": [
       { "host": "localnode.local.mesh", "name": "My Node" }
     ]
+  },
+  "storage": {
+    "enabled": false,
+    "directory": "./metrics_data"
   }
 }

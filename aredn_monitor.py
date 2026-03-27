@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """AREDN Node Monitor - python3 aredn_monitor.py [--host 0.0.0.0] [--port 8765]"""
-import argparse, json, re, sys, urllib.error, urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+import argparse, json, math, os, re, sys, threading, urllib.error, urllib.request
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 _SR = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+([-+]?(?:NaN|[+-]?Inf|\d*\.?\d+(?:[eE][-+]?\d+)?))')
@@ -19,6 +20,48 @@ def parse_prom(text):
         except ValueError: val = None
         r.setdefault(m.group(1), []).append({'labels': labels, 'value': val})
     return r
+
+def _sanitize_json_floats(obj):
+    """Replace NaN/Inf so json.dumps(..., allow_nan=False) works."""
+    if isinstance(obj, float):
+        if not math.isfinite(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_json_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json_floats(v) for v in obj]
+    return obj
+
+def _metrics_log_path(storage_dir, node):
+    safe = re.sub(r'[^\w.\-]+', '_', node).strip('._') or 'node'
+    return os.path.join(storage_dir, safe[:200] + '.jsonl')
+
+def append_metrics_log(server, node, metrics):
+    d = getattr(server, 'metrics_storage_dir', None)
+    if not d or metrics is None:
+        return
+    lock = getattr(server, 'metrics_lock', None)
+    path = _metrics_log_path(d, node)
+    record = {
+        'ts': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        'node': node,
+        'metrics': _sanitize_json_floats(metrics),
+    }
+    try:
+        line = json.dumps(record, separators=(',', ':'), ensure_ascii=True, allow_nan=False) + '\n'
+    except (TypeError, ValueError):
+        return
+    try:
+        if lock:
+            with lock:
+                with open(path, 'a', encoding='utf-8') as f:
+                    f.write(line)
+        else:
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(line)
+    except OSError as e:
+        print('  metrics log write failed:', path, e, file=sys.stderr)
 
 PAGE = b"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
@@ -489,7 +532,9 @@ class H(BaseHTTPRequestHandler):
                 req = urllib.request.Request(url, headers={'User-Agent':'AREDN-Monitor/2.0'})
                 with urllib.request.urlopen(req, timeout=12) as r:
                     raw = r.read().decode('utf-8','replace')
-                self._json(200,{'ok':True,'url':url,'raw':raw,'metrics':parse_prom(raw)})
+                parsed = parse_prom(raw)
+                append_metrics_log(self.server, node, parsed)
+                self._json(200,{'ok':True,'url':url,'raw':raw,'metrics':parsed})
             except urllib.error.URLError as e:
                 self._json(502,{'ok':False,'error':str(e.reason),'url':url})
             except Exception as e:
@@ -527,11 +572,22 @@ def _build_page(config):
     page = page.replace(b'__DEFAULT_IV__', str(iv).encode('utf-8'))
     return page
 
+def _resolve_storage_dir(config, cli_storage):
+    """Return absolute path to log directory, or None if disabled."""
+    if cli_storage:
+        return os.path.abspath(cli_storage)
+    st = (config or {}).get('storage') if isinstance(config, dict) else None
+    if not isinstance(st, dict) or not st.get('enabled'):
+        return None
+    return os.path.abspath(st.get('directory') or './metrics_data')
+
 def main():
     ap = argparse.ArgumentParser(description='AREDN Node Monitor')
     ap.add_argument('--config', default=None, help='Path to JSON config file')
     ap.add_argument('--host', default=None)
     ap.add_argument('--port', type=int, default=None)
+    ap.add_argument('--storage', metavar='DIR', default=None,
+                    help='Append each successful metrics fetch to JSONL files under DIR (overrides config storage)')
     a = ap.parse_args()
 
     config = {}
@@ -546,12 +602,24 @@ def main():
     host = a.host or server_cfg.get('host', '127.0.0.1')
     port = a.port or server_cfg.get('port', 8765)
 
+    storage_dir = _resolve_storage_dir(config, a.storage)
+    if storage_dir:
+        try:
+            os.makedirs(storage_dir, exist_ok=True)
+        except OSError as e:
+            print(f'Failed to create metrics storage directory {storage_dir}: {e}', file=sys.stderr)
+            raise SystemExit(2)
+
     srv = ThreadingHTTPServer((host, port), H)
     srv.page = _build_page(config)
+    srv.metrics_storage_dir = storage_dir
+    srv.metrics_lock = threading.Lock()
     url = 'http://{}:{}'.format('localhost' if host=='127.0.0.1' else host, port)
     print('='*45)
     print('  AREDN Node Monitor')
     print('  Open: '+url)
+    if storage_dir:
+        print('  Metrics storage: ' + storage_dir)
     print('  Ctrl+C to stop')
     print('='*45)
     try: srv.serve_forever()

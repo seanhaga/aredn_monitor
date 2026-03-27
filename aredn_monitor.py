@@ -176,7 +176,30 @@ function gv(M,n,lf){const s=(M[n]||[]).find(s=>!lf||Object.entries(lf).every(([k
 function ga(M,n){return M[n]||[];}
 function pc(v){return v>90?['cr','r']:v>70?['cw','w']:['cg','g'];}
 function lc(v){return v>1.5?'var(--r)':v>1?'var(--w)':'var(--g)';}
-function qb(q){if(q==null)return'<span class="bdg bn">N/A</span>';return'<span class="bdg '+(q>.7?'bg':q>.4?'bw':'br')+'">'+(q*100).toFixed(0)+'%</span>';}
+function qb(q){
+  if(q==null||!isFinite(Number(q)))return'<span class="bdg bn">N/A</span>';
+  const qn=Number(q);
+  const frac=qn>1?qn/100:qn;
+  const pct=qn>1?qn:qn*100;
+  return'<span class="bdg '+(frac>.7?'bg':frac>.4?'bw':'br')+'">'+pct.toFixed(0)+'%</span>';
+}
+function peerKey(l){
+  if(!l)return'';
+  const k=l.node||l.hostname||l.peer||l.neighbor||l.neighbor_node||l.destination||l.dest||l.name||l.mac||l.id||l.ip||l.remote||l.target||'';
+  if(k)return String(k).trim();
+  try{
+    for(const [n,v] of Object.entries(l)){
+      if(v==null||v==='')continue;
+      if(/node|host|peer|neighbor|dest|remote|target|mesh/i.test(n))return String(v).trim();
+    }
+  }catch(e){}
+  return'';
+}
+function normPeer(s){return String(s||'').trim().toLowerCase();}
+function findLqmSample(arr,p){
+  const np=normPeer(p);
+  return(arr||[]).find(s=>normPeer(peerKey(s.labels))===np);
+}
 function sc(s){return s==null?'var(--d)':s>-65?'var(--g)':s>-80?'var(--w)':'var(--r)';}
 
 function save(){try{localStorage.setItem('aredn',JSON.stringify(S.nodes.map(n=>({host:n.host,name:n.name}))));}catch(e){}}
@@ -300,8 +323,10 @@ function renderDash(){
   const bNbr=gv(M,'node_babel_neighbor_total'),bRts=gv(M,'node_babel_route_total');
   const cIn=gv(M,'node_arednlink_connection_incoming_total'),cOut=gv(M,'node_arednlink_connection_outgoing_total');
   const svc=gv(M,'node_arednlink_service_count_total');
-  const lqmS=ga(M,'node_lqm_tracker_quality'),sigS=ga(M,'node_lqm_tracker_signal');
-  const noiS=ga(M,'node_lqm_tracker_noise'),snrS=ga(M,'node_lqm_tracker_snr');
+  const lqmS=ga(M,'node_lqm_tracker_quality').length?ga(M,'node_lqm_tracker_quality'):ga(M,'node_lqm_quality');
+  const sigS=ga(M,'node_lqm_tracker_signal').length?ga(M,'node_lqm_tracker_signal'):ga(M,'node_lqm_signal');
+  const noiS=ga(M,'node_lqm_tracker_noise').length?ga(M,'node_lqm_tracker_noise'):ga(M,'node_lqm_noise');
+  const snrS=ga(M,'node_lqm_tracker_snr').length?ga(M,'node_lqm_tracker_snr'):ga(M,'node_lqm_snr');
   const rxS=ga(M,'node_network_receive_bytes_total'),txS=ga(M,'node_network_transmit_bytes_total');
   const rxES=ga(M,'node_network_receive_errs_total'),txES=ga(M,'node_network_transmit_errs_total');
 
@@ -318,16 +343,19 @@ function renderDash(){
   }
   const mc=pc(mP),fc=pc(fsP),lcls=l1>1.5?'cr':l1>1?'cw':'cg';
 
-  const lqmRows=lqmS.map(s=>{
-    const p=s.labels.node||s.labels.hostname||'?',q=s.value;
-    const sig=(sigS.find(x=>x.labels.node===p)||{}).value??null;
-    const noi=(noiS.find(x=>x.labels.node===p)||{}).value??null;
-    const snr=(snrS.find(x=>x.labels.node===p)||{}).value??(sig!=null&&noi!=null?sig-noi:null);
+  const peerSet=new Set();
+  [lqmS,sigS,noiS,snrS].forEach(arr=>(arr||[]).forEach(s=>{const k=peerKey(s.labels);if(k)peerSet.add(k);}));
+  const peerList=[...peerSet].sort((a,b)=>a.localeCompare(b));
+  const lqmRows=peerList.length?peerList.map(p=>{
+    const qs=findLqmSample(lqmS,p),ss=findLqmSample(sigS,p),ns=findLqmSample(noiS,p),zs=findLqmSample(snrS,p);
+    const q=qs?qs.value:null,sig=ss?ss.value:null,noi=ns?ns.value:null;
+    let snr=zs?zs.value:null;
+    if(snr==null&&sig!=null&&noi!=null)snr=sig-noi;
     return'<tr><td><strong>'+esc(p)+'</strong></td><td>'+qb(q)+'</td>'
       +'<td style="color:'+sc(sig)+';font-weight:600">'+(sig!=null?sig.toFixed(0)+' dBm':'&#8212;')+'</td>'
       +'<td style="color:var(--w)">'+(noi!=null?noi.toFixed(0)+' dBm':'&#8212;')+'</td>'
       +'<td style="color:var(--b)">'+(snr!=null?snr.toFixed(0)+' dB':'&#8212;')+'</td></tr>';
-  }).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--d);padding:14px">No LQM data</td></tr>';
+  }).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--d);padding:14px">No LQM data</td></tr>';
 
   const ifMap={};
   [[rxS,'rx'],[txS,'tx'],[rxES,'rxe'],[txES,'txe']].forEach(([arr,k])=>arr.forEach(s=>{const d=s.labels.device||'?';if(!ifMap[d])ifMap[d]={};ifMap[d][k]=s.value;}));

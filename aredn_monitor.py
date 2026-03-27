@@ -163,7 +163,7 @@ const ge=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 const fmt={
-  b:v=>{if(v==null||isNaN(v))return'N/A';const u=['B','KB','MB','GB','TB'];let i=0;while(v>=1024&&i<4){v/=1024;i++;}return v.toFixed(i?1:0)+'\xa0'+u[i];},
+  b:v=>{if(v==null||isNaN(v))return'N/A';const u=['B','KB','MB','GB','TB'];let i=0;while(v>=1024&&i<4){v/=1024;i++;}return v.toFixed(i?1:0)+'\\u00A0'+u[i];},
   bps:v=>v==null?'N/A':fmt.b(v)+'/s',
   up:s=>{if(s==null)return'N/A';s=Math.floor(s);const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sc=s%60;return d?d+'d '+h+'h '+m+'m':h?h+'h '+m+'m '+sc+'s':m+'m '+sc+'s';},
   pct:v=>v==null?'N/A':v.toFixed(1)+'%',
